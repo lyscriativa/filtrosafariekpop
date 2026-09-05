@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <title>Moldura personalizada</title>
+  <style>
+    *{box-sizing:border-box}
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;font-family:Arial,sans-serif}
+    button{font:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
+    #palco{position:fixed;inset:0;overflow:hidden;background:#000}
+    #camera{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+    #camera.espelho{transform:scaleX(-1)}
+    #moldura{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;pointer-events:none;z-index:2}
+    #inicio{position:fixed;inset:0;z-index:30;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:26px;background:#000;color:#fff;text-align:center}
+    #inicio button{border:0;border-radius:999px;padding:15px 24px;background:#fff;color:#222;font-weight:700}
+    #erro{display:none;max-width:430px;color:#ffc7c7;line-height:1.4}
+    #controles{position:fixed;left:0;right:0;bottom:calc(38px + env(safe-area-inset-bottom));z-index:10;display:none;align-items:center;justify-content:center;gap:26px}
+    .botao-redondo{width:68px;height:68px;border:0;border-radius:50%;background:#fff;font-size:27px;box-shadow:0 4px 12px rgba(0,0,0,.35)}
+    #pararVideo{display:none;background:#fff;color:#d00000}
+    #gravando{position:fixed;top:calc(18px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:12;display:none;padding:8px 14px;border-radius:999px;background:rgba(0,0,0,.72);color:#fff;font-weight:700}
+    #preparando{position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;padding:25px;background:rgba(0,0,0,.78);color:#fff;text-align:center;font-weight:700}
+    .previa{position:fixed;inset:0;z-index:40;display:none;flex-direction:column;align-items:center;justify-content:center;background:#111;padding:18px 18px calc(22px + env(safe-area-inset-bottom))}
+    .previa img,.previa video{width:100%;height:calc(100% - 150px);object-fit:contain;background:#000;border-radius:12px}
+    .acoes{display:flex;flex-wrap:wrap;justify-content:center;gap:9px;margin-top:14px}
+    .acoes button{border:0;border-radius:10px;padding:12px 16px;background:#fff;color:#222;font-weight:700}
+    .acoes .salvar{background:#36a852;color:#fff}
+    #canvasFoto,#canvasVideo{display:none}
+  </style>
+</head>
+<body>
+  <main id="palco">
+    <video id="camera" autoplay muted playsinline></video>
+    <img id="moldura" src="moldura.png" alt="Moldura do evento">
+  </main>
+  <section id="inicio">
+    <h2>Moldura personalizada</h2>
+    <p>Toque abaixo e permita o acesso à câmera e ao microfone.</p>
+    <button id="abrirCamera">Abrir câmera</button>
+    <p id="erro"></p>
+  </section>
+  <div id="gravando">🔴 REC <span id="tempo">00:00</span></div>
+  <div id="preparando">Aguarde… preparando o seu vídeo.</div>
+  <nav id="controles" aria-label="Controles da câmera">
+    <button class="botao-redondo" id="trocarCamera" title="Trocar câmera">🔄</button>
+    <button class="botao-redondo" id="tirarFoto" title="Tirar foto">📸</button>
+    <button class="botao-redondo" id="gravarVideo" title="Gravar vídeo">🎥</button>
+    <button class="botao-redondo" id="pararVideo" title="Parar gravação">⏹</button>
+  </nav>
+  <canvas id="canvasFoto"></canvas>
+  <canvas id="canvasVideo"></canvas>
+  <section class="previa" id="previaFoto">
+    <img id="imagemFoto" alt="Prévia da foto">
+    <div class="acoes">
+      <button id="novaFoto">Tirar outra</button>
+      <button class="salvar" id="salvarFoto">Salvar</button>
+      <button id="compartilharFoto">Compartilhar</button>
+    </div>
+  </section>
+  <section class="previa" id="previaVideo">
+    <video id="videoPronto" controls playsinline></video>
+    <div class="acoes">
+      <button id="novoVideo">Gravar outro</button>
+      <button class="salvar" id="salvarVideo">Salvar vídeo</button>
+      <button id="compartilharVideo">Compartilhar</button>
+    </div>
+  </section>
+  <script>
+    const camera=document.getElementById('camera');
+    const moldura=document.getElementById('moldura');
+    const inicio=document.getElementById('inicio');
+    const erro=document.getElementById('erro');
+    const controles=document.getElementById('controles');
+    const gravando=document.getElementById('gravando');
+    const tempo=document.getElementById('tempo');
+    const preparando=document.getElementById('preparando');
+    const canvasFoto=document.getElementById('canvasFoto');
+    const canvasVideo=document.getElementById('canvasVideo');
+    const previaFoto=document.getElementById('previaFoto');
+    const previaVideo=document.getElementById('previaVideo');
+    const imagemFoto=document.getElementById('imagemFoto');
+    const videoPronto=document.getElementById('videoPronto');
+    let streamCamera=null;
+    let cameraFrontal=true;
+    let gravador=null;
+    let partesVideo=[];
+    let gravacaoAtiva=false;
+    let animacao=null;
+    let cronometro=null;
+    let inicioGravacao=0;
+    let fotoBlob=null;
+    let fotoUrl='';
+    let videoBlob=null;
+    let videoUrl='';
+    let extensaoVideo='webm';
+
+    async function abrirCamera(){
+      erro.style.display='none';
+      try{
+        if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia) throw new Error('Câmera não disponível');
+        if(streamCamera) streamCamera.getTracks().forEach(track=>track.stop());
+        streamCamera=await navigator.mediaDevices.getUserMedia({
+          video:{
+            facingMode:{ideal:cameraFrontal?'user':'environment'},
+            width:{ideal:3840},
+            height:{ideal:2160},
+            frameRate:{ideal:30,max:30}
+          },
+          audio:true
+        });
+        camera.srcObject=streamCamera;
+        const trilhaCamera=streamCamera.getVideoTracks()[0];
+        const capacidades=trilhaCamera.getCapabilities?.();
+        if(capacidades?.zoom){
+          await trilhaCamera.applyConstraints({advanced:[{zoom:capacidades.zoom.min}]});
+        }
+        camera.classList.toggle('espelho',cameraFrontal);
+        await camera.play();
+        inicio.style.display='none';
+        controles.style.display='flex';
+      }catch(e){
+        erro.textContent='Não foi possível abrir a câmera. Abra o link no Safari ou Chrome e permita câmera e microfone.';
+        erro.style.display='block';
+      }
+    }
+
+    function desenharCapa(ctx,origem,origemW,origemH,destinoW,destinoH,espelhar){
+      const escala=Math.max(destinoW/origemW,destinoH/origemH);
+      const corteW=destinoW/escala;
+      const corteH=destinoH/escala;
+      const corteX=(origemW-corteW)/2;
+      const corteY=(origemH-corteH)/2;
+      ctx.save();
+      if(espelhar){ctx.translate(destinoW,0);ctx.scale(-1,1)}
+      ctx.drawImage(origem,corteX,corteY,corteW,corteH,0,0,destinoW,destinoH);
+      ctx.restore();
+    }
+
+    async function garantirMoldura(){
+      try{await moldura.decode();return true}catch(e){alert('A moldura não foi encontrada. Confira se o arquivo se chama moldura.png.');return false}
+    }
+
+    async function fotografar(){
+      if(!camera.videoWidth||!(await garantirMoldura())) return;
+      canvasFoto.width=1440;
+      canvasFoto.height=2560;
+      const ctx=canvasFoto.getContext('2d');
+      ctx.imageSmoothingEnabled=true;
+      ctx.imageSmoothingQuality='high';
+      desenharCapa(ctx,camera,camera.videoWidth,camera.videoHeight,canvasFoto.width,canvasFoto.height,cameraFrontal);
+      ctx.drawImage(moldura,0,0,canvasFoto.width,canvasFoto.height);
+      fotoBlob=await new Promise(resolve=>canvasFoto.toBlob(resolve,'image/jpeg',0.99));
+      if(fotoUrl) URL.revokeObjectURL(fotoUrl);
+      fotoUrl=URL.createObjectURL(fotoBlob);
+      imagemFoto.src=fotoUrl;
+      controles.style.display='none';
+      previaFoto.style.display='flex';
+    }
+
+    function renderizarVideo(){
+      if(!gravacaoAtiva) return;
+      const ctx=canvasVideo.getContext('2d');
+      desenharCapa(ctx,camera,camera.videoWidth,camera.videoHeight,canvasVideo.width,canvasVideo.height,cameraFrontal);
+      ctx.drawImage(moldura,0,0,canvasVideo.width,canvasVideo.height);
+      animacao=requestAnimationFrame(renderizarVideo);
+    }
+
+    function escolherFormato(){
+      const tipos=['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
+      return tipos.find(tipo=>MediaRecorder.isTypeSupported(tipo))||'';
+    }
+
+    async function iniciarVideo(){
+      if(!camera.videoWidth||!(await garantirMoldura())) return;
+      if(!window.MediaRecorder||!canvasVideo.captureStream){alert('A gravação de vídeo não é compatível com este navegador.');return}
+      canvasVideo.width=720;
+      canvasVideo.height=1280;
+      gravacaoAtiva=true;
+      renderizarVideo();
+      const streamCanvas=canvasVideo.captureStream(30);
+      const trilhas=[...streamCanvas.getVideoTracks(),...streamCamera.getAudioTracks()];
+      const streamFinal=new MediaStream(trilhas);
+      const tipo=escolherFormato();
+      extensaoVideo=tipo.includes('mp4')?'mp4':'webm';
+      partesVideo=[];
+      gravador=tipo?new MediaRecorder(streamFinal,{mimeType:tipo,videoBitsPerSecond:4000000}):new MediaRecorder(streamFinal);
+      gravador.ondataavailable=evento=>{if(evento.data&&evento.data.size) partesVideo.push(evento.data)};
+      gravador.onstop=finalizarVideo;
+      gravador.start(250);
+      document.getElementById('gravarVideo').style.display='none';
+      document.getElementById('tirarFoto').style.display='none';
+      document.getElementById('trocarCamera').style.display='none';
+      document.getElementById('pararVideo').style.display='block';
+      gravando.style.display='block';
+      inicioGravacao=Date.now();
+      tempo.textContent='00:00';
+      cronometro=setInterval(()=>{
+        const segundos=Math.floor((Date.now()-inicioGravacao)/1000);
+        const min=String(Math.floor(segundos/60)).padStart(2,'0');
+        const seg=String(segundos%60).padStart(2,'0');
+        tempo.textContent=`${min}:${seg}`;
+      },500);
+    }
+
+    function pararVideo(){
+      if(!gravador||gravador.state==='inactive') return;
+      preparando.style.display='flex';
+      gravacaoAtiva=false;
+      if(animacao) cancelAnimationFrame(animacao);
+      clearInterval(cronometro);
+      gravando.style.display='none';
+      gravador.stop();
+    }
+
+    function finalizarVideo(){
+      const tipo=gravador.mimeType||(extensaoVideo==='mp4'?'video/mp4':'video/webm');
+      videoBlob=new Blob(partesVideo,{type:tipo});
+      if(videoUrl) URL.revokeObjectURL(videoUrl);
+      videoUrl=URL.createObjectURL(videoBlob);
+      videoPronto.src=videoUrl;
+      preparando.style.display='none';
+      controles.style.display='none';
+      previaVideo.style.display='flex';
+      restaurarControles();
+    }
+
+    function restaurarControles(){
+      document.getElementById('gravarVideo').style.display='block';
+      document.getElementById('tirarFoto').style.display='block';
+      document.getElementById('trocarCamera').style.display='block';
+      document.getElementById('pararVideo').style.display='none';
+    }
+
+    function baixar(blob,nome,url){
+      if(!blob) return;
+      const link=document.createElement('a');
+      link.href=url;
+      link.download=nome;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    }
+
+    async function compartilhar(blob,nome,tipo,url){
+      if(!blob) return;
+      const arquivo=new File([blob],nome,{type:tipo});
+      if(navigator.share&&(!navigator.canShare||navigator.canShare({files:[arquivo]}))){
+        try{await navigator.share({files:[arquivo],title:'Registro com moldura'});return}catch(e){if(e.name==='AbortError')return}
+      }
+      baixar(blob,nome,url);
+    }
+
+    document.getElementById('abrirCamera').addEventListener('click',abrirCamera);
+    document.getElementById('trocarCamera').addEventListener('click',async()=>{cameraFrontal=!cameraFrontal;await abrirCamera()});
+    document.getElementById('tirarFoto').addEventListener('click',fotografar);
+    document.getElementById('gravarVideo').addEventListener('click',iniciarVideo);
+    document.getElementById('pararVideo').addEventListener('click',pararVideo);
+    document.getElementById('novaFoto').addEventListener('click',()=>{previaFoto.style.display='none';controles.style.display='flex'});
+    document.getElementById('novoVideo').addEventListener('click',()=>{videoPronto.pause();previaVideo.style.display='none';controles.style.display='flex'});
+    document.getElementById('salvarFoto').addEventListener('click',()=>baixar(fotoBlob,'foto-com-moldura.jpg',fotoUrl));
+    document.getElementById('compartilharFoto').addEventListener('click',()=>compartilhar(fotoBlob,'foto-com-moldura.jpg','image/jpeg',fotoUrl));
+    document.getElementById('salvarVideo').addEventListener('click',()=>baixar(videoBlob,`video-com-moldura.${extensaoVideo}`,videoUrl));
+    document.getElementById('compartilharVideo').addEventListener('click',()=>compartilhar(videoBlob,`video-com-moldura.${extensaoVideo}`,videoBlob?.type||'video/webm',videoUrl));
+    window.addEventListener('beforeunload',()=>{
+      if(streamCamera) streamCamera.getTracks().forEach(track=>track.stop());
+      if(fotoUrl) URL.revokeObjectURL(fotoUrl);
+      if(videoUrl) URL.revokeObjectURL(videoUrl);
+    });
+  </script>
+</body>
+</html>
